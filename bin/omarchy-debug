@@ -92,7 +92,11 @@ case "$ACTION" in
     less "$LOG_FILE"
     ;;
   "Save in current directory")
-    cp "$LOG_FILE" "./omarchy-debug.log"
-    echo "✓ Log saved to $(pwd)/omarchy-debug.log"
+    if cp "$LOG_FILE" "./omarchy-debug.log"; then
+      echo "✓ Log saved to $(pwd)/omarchy-debug.log"
+    else
+      echo "Error: Failed to save log file"
+      exit 1
+    fi
     ;;
 esac
