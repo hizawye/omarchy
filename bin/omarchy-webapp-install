@@ -50,8 +50,20 @@ install_user_icon() {
 }
 
 download_icon() {
-  curl -fsSL --max-time 10 -o "$2" "$1" 2>/dev/null &&
+  curl -fsSL --proto '=http,https' --proto-redir '=http,https' --max-time 10 -o "$2" "$1" 2>/dev/null &&
     [[ -s $2 && $(file -b --mime-type "$2") == image/* ]]
+}
+
+download_site_icon() {
+  # Automatic icon discovery must not turn an untrusted page into a redirector
+  # toward another origin. Explicit icon URLs still use download_icon above.
+  curl -fsS --proto '=http,https' --max-redirs 0 --max-time 10 -o "$2" "$1" 2>/dev/null &&
+    [[ -s $2 && $(file -b --mime-type "$2") == image/* ]]
+}
+
+url_origin() {
+  local url=$1
+  [[ $url =~ ^([Hh][Tt][Tt][Pp][Ss]?://[^/?#]+) ]] && printf '%s' "${BASH_REMATCH[1]}"
 }
 
 # Chromium --app= treats javascript:, file:, and data: as a document to
@@ -84,24 +96,32 @@ require_http_url() {
 
 fetch_site_icon() {
   local site_url="$1" dest="$2"
-  local origin page icon_url
-  origin=$(sed -E 's|^(https?://[^/]+).*|\1|' <<<"$site_url")
+  local origin page icon_url icon_origin icon_url_lower
+  origin=$(url_origin "$site_url")
 
   # Prefer the site's own high-res icon (apple-touch-icon is typically 180px+),
   # then the well-known path, then Google's favicon service as a last resort.
-  page=$(curl -fsSL --max-time 5 "$site_url" 2>/dev/null | head -c 100000 | tr '\n' ' ')
+  page=$(curl -fsSL --proto '=http,https' --proto-redir '=http,https' --max-time 5 "$site_url" 2>/dev/null | head -c 100000 | tr '\n' ' ')
   icon_url=$(grep -oiE "<link[^>]*rel=[\"'][^\"']*apple-touch-icon[^\"']*[\"'][^>]*>" <<<"$page" |
     grep -oiE "href=[\"'][^\"']+" | head -1 | sed -E "s/^href=[\"']//")
 
-  case $icon_url in
-  http://* | https://*) ;;
-  //*) icon_url="https:$icon_url" ;;
+  icon_url_lower=${icon_url,,}
+  case $icon_url_lower in
+  http://* | https://*)
+    icon_origin=$(url_origin "$icon_url")
+    [[ ${icon_origin,,} == "${origin,,}" ]] || icon_url=""
+    ;;
+  //*)
+    icon_url="${origin%%://*}:$icon_url"
+    icon_origin=$(url_origin "$icon_url")
+    [[ ${icon_origin,,} == "${origin,,}" ]] || icon_url=""
+    ;;
   /*) icon_url="$origin$icon_url" ;;
   ?*) icon_url="$origin/$icon_url" ;;
   esac
 
-  { [[ -n $icon_url ]] && download_icon "$icon_url" "$dest"; } ||
-    download_icon "$origin/apple-touch-icon.png" "$dest" ||
+  { [[ -n $icon_url ]] && download_site_icon "$icon_url" "$dest"; } ||
+    download_site_icon "$origin/apple-touch-icon.png" "$dest" ||
     download_icon "https://www.google.com/s2/favicons?domain=${site_url}&sz=256" "$dest"
 }
 

@@ -138,3 +138,54 @@ grep -Fq 'must be http or https' "$tmpdir/err" ||
   fail "interactive webapp install refuses before fetching the URL" "$(cat "$tmpdir/curl-log")"
 [[ ! -e $(desktop_for Evil) ]] || fail "interactive webapp install writes no desktop file"
 pass "interactive webapp install refuses a bad URL before fetching it"
+
+cat >"$stubs/curl" <<'CURL'
+#!/bin/bash
+output=""
+url=""
+while (( $# > 0 )); do
+  case "$1" in
+  -o)
+    output=$2
+    shift 2
+    ;;
+  http://* | https://*)
+    url=$1
+    shift
+    ;;
+  *) shift ;;
+  esac
+done
+
+printf '%s\n' "$url" >>"$CURL_LOG"
+if [[ $url == "https://example.com/app" ]]; then
+  printf '%s\n' '<link rel="apple-touch-icon" href="http://127.0.0.1/private-action">'
+elif [[ $url == "https://example.com/apple-touch-icon.png" ]]; then
+  printf 'image' >"$output"
+else
+  exit 22
+fi
+CURL
+
+cat >"$stubs/file" <<'FILE'
+#!/bin/bash
+printf '%s\n' image/png
+FILE
+
+chmod +x "$stubs/curl" "$stubs/file"
+: >"$tmpdir/curl-log"
+
+if CURL_LOG="$tmpdir/curl-log" PATH="$stubs:$ROOT/bin:/usr/bin:/bin" HOME="$home" \
+  "$ROOT/bin/omarchy-webapp-install" "Steered" "https://example.com/app" "" \
+  >"$tmpdir/out" 2>"$tmpdir/err"; then
+  :
+else
+  fail "webapp install falls back to a same-origin icon" "$(cat "$tmpdir/err")"
+fi
+
+grep -Fxq 'https://example.com/apple-touch-icon.png' "$tmpdir/curl-log" ||
+  fail "webapp install tries the site's same-origin default icon" "$(cat "$tmpdir/curl-log")"
+if grep -Fq '127.0.0.1' "$tmpdir/curl-log"; then
+  fail "webapp install does not follow a page-provided icon to another origin" "$(cat "$tmpdir/curl-log")"
+fi
+pass "webapp install keeps automatic icon requests on the selected site's origin"
