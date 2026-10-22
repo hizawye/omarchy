@@ -22,7 +22,7 @@ description with steps to reproduce, and diagnostics. Gather them:
 ```bash
 omarchy version
 
-# Print diagnostics and save a copy for the issue
+# Save the diagnostics to attach to the issue
 omarchy debug --no-sudo --print > omarchy-debug.log
 
 # Interactive variant: `omarchy debug` can save the log in the current
