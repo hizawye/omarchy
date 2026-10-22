@@ -66,7 +66,18 @@ url_origin() {
 
   [[ $url =~ ^([Hh][Tt][Tt][Pp][Ss]?)://([^/?#]+) ]] || return 1
   scheme=${BASH_REMATCH[1],,}
-  authority=${BASH_REMATCH[2],,}
+  authority=${BASH_REMATCH[2]}
+
+  printf '%s://%s' "$scheme" "$authority"
+}
+
+canonical_origin() {
+  local url=$1 scheme authority
+
+  [[ $url =~ ^([Hh][Tt][Tt][Pp][Ss]?)://([^/?#]+) ]] || return 1
+  scheme=${BASH_REMATCH[1],,}
+  authority=${BASH_REMATCH[2]##*@}
+  authority=${authority,,}
 
   case "$scheme:$authority" in
   http:*:80) authority=${authority%:80} ;;
@@ -106,8 +117,9 @@ require_http_url() {
 
 fetch_site_icon() {
   local site_url="$1" dest="$2"
-  local origin page icon_url icon_origin icon_url_lower
+  local origin origin_key page icon_url icon_origin icon_url_lower
   origin=$(url_origin "$site_url")
+  origin_key=$(canonical_origin "$site_url")
 
   # Prefer the site's own high-res icon (apple-touch-icon is typically 180px+),
   # then the well-known path, then Google's favicon service as a last resort.
@@ -118,13 +130,13 @@ fetch_site_icon() {
   icon_url_lower=${icon_url,,}
   case $icon_url_lower in
   http://* | https://*)
-    icon_origin=$(url_origin "$icon_url")
-    [[ ${icon_origin,,} == "${origin,,}" ]] || icon_url=""
+    icon_origin=$(canonical_origin "$icon_url")
+    [[ $icon_origin == "$origin_key" ]] || icon_url=""
     ;;
   //*)
     icon_url="${origin%%://*}:$icon_url"
-    icon_origin=$(url_origin "$icon_url")
-    [[ ${icon_origin,,} == "${origin,,}" ]] || icon_url=""
+    icon_origin=$(canonical_origin "$icon_url")
+    [[ $icon_origin == "$origin_key" ]] || icon_url=""
     ;;
   /*) icon_url="$origin$icon_url" ;;
   ?*) icon_url="$origin/$icon_url" ;;

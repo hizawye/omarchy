@@ -172,6 +172,10 @@ elif [[ $url == "https://example.com/default-port" ]]; then
   printf '%s\n' '<link rel="apple-touch-icon" href="https://example.com:443/icon.png">'
 elif [[ $url == "https://example.com:443/icon.png" ]]; then
   printf 'image' >"$output"
+elif [[ $url == "https://User:Secret@example.com/credentialed" ]]; then
+  printf '%s\n' '<link rel="apple-touch-icon" href="/credentialed-icon.png">'
+elif [[ $url == "https://User:Secret@example.com/credentialed-icon.png" ]]; then
+  printf 'image' >"$output"
 elif [[ $url == "https://example.com/apple-touch-icon.png" ]]; then
   printf 'image' >"$output"
 else
@@ -214,11 +218,23 @@ grep -Fxq 'https://example.com:443/icon.png' "$tmpdir/curl-log" ||
   fail "webapp install normalizes default ports for origin comparison" "$(cat "$tmpdir/curl-log")"
 pass "webapp install treats an explicit default port as the same origin"
 
+: >"$tmpdir/curl-log"
+if CURL_LOG="$tmpdir/curl-log" PATH="$stubs:$ROOT/bin:/usr/bin:/bin" HOME="$home" \
+  "$ROOT/bin/omarchy-webapp-install" "Credentialed" "https://User:Secret@example.com/credentialed" "" \
+  >"$tmpdir/out" 2>"$tmpdir/err"; then
+  :
+else
+  fail "webapp install fetches an icon for a credentialed URL" "$(cat "$tmpdir/err")"
+fi
+grep -Fxq 'https://User:Secret@example.com/credentialed-icon.png' "$tmpdir/curl-log" ||
+  fail "webapp install preserves credentials when constructing relative icon URLs" "$(cat "$tmpdir/curl-log")"
+pass "webapp install preserves URL credentials in automatic icon requests"
+
 rm "$stubs/curl"
 server_url_file="$tmpdir/server-url"
 sink_log="$tmpdir/redirect-sink"
 
-python3 - "$server_url_file" "$sink_log" <<'PY' &
+python3 - "$server_url_file" "$sink_log" >/dev/null <<'PY' &
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
