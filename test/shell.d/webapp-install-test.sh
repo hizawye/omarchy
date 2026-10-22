@@ -5,7 +5,15 @@ set -euo pipefail
 source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/base-test.sh"
 
 tmpdir=$(mktemp -d)
-trap 'rm -rf "$tmpdir"' EXIT
+server_pid=""
+cleanup() {
+  if [[ -n $server_pid ]] && kill -0 "$server_pid" 2>/dev/null; then
+    kill "$server_pid" 2>/dev/null || true
+    wait "$server_pid" 2>/dev/null || true
+  fi
+  rm -rf "$tmpdir"
+}
+trap cleanup EXIT
 
 home="$tmpdir/home"
 mkdir -p "$home/.local/share/applications"
@@ -160,6 +168,10 @@ done
 printf '%s\n' "$url" >>"$CURL_LOG"
 if [[ $url == "https://example.com/app" ]]; then
   printf '%s\n' '<link rel="apple-touch-icon" href="http://127.0.0.1/private-action">'
+elif [[ $url == "https://example.com/default-port" ]]; then
+  printf '%s\n' '<link rel="apple-touch-icon" href="https://example.com:443/icon.png">'
+elif [[ $url == "https://example.com:443/icon.png" ]]; then
+  printf 'image' >"$output"
 elif [[ $url == "https://example.com/apple-touch-icon.png" ]]; then
   printf 'image' >"$output"
 else
@@ -189,3 +201,89 @@ if grep -Fq '127.0.0.1' "$tmpdir/curl-log"; then
   fail "webapp install does not follow a page-provided icon to another origin" "$(cat "$tmpdir/curl-log")"
 fi
 pass "webapp install keeps automatic icon requests on the selected site's origin"
+
+: >"$tmpdir/curl-log"
+if CURL_LOG="$tmpdir/curl-log" PATH="$stubs:$ROOT/bin:/usr/bin:/bin" HOME="$home" \
+  "$ROOT/bin/omarchy-webapp-install" "DefaultPort" "https://example.com/default-port" "" \
+  >"$tmpdir/out" 2>"$tmpdir/err"; then
+  :
+else
+  fail "webapp install accepts an explicit default port on a same-origin icon" "$(cat "$tmpdir/err")"
+fi
+grep -Fxq 'https://example.com:443/icon.png' "$tmpdir/curl-log" ||
+  fail "webapp install normalizes default ports for origin comparison" "$(cat "$tmpdir/curl-log")"
+pass "webapp install treats an explicit default port as the same origin"
+
+rm "$stubs/curl"
+server_url_file="$tmpdir/server-url"
+sink_log="$tmpdir/redirect-sink"
+
+python3 - "$server_url_file" "$sink_log" <<'PY' &
+import sys
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+url_file, sink_log = sys.argv[1:]
+
+class SinkHandler(BaseHTTPRequestHandler):
+  def log_message(self, *args):
+    pass
+
+  def do_GET(self):
+    with open(sink_log, "a", encoding="utf-8") as log:
+      log.write(self.path + "\n")
+    self.send_response(200)
+    self.end_headers()
+    self.wfile.write(b"image")
+
+sink = ThreadingHTTPServer(("127.0.0.1", 0), SinkHandler)
+threading.Thread(target=sink.serve_forever, daemon=True).start()
+
+class SiteHandler(BaseHTTPRequestHandler):
+  def log_message(self, *args):
+    pass
+
+  def do_GET(self):
+    if self.path == "/app":
+      self.send_response(200)
+      self.end_headers()
+      self.wfile.write(b'<link rel="apple-touch-icon" href="/redirect-icon.png">')
+    elif self.path == "/redirect-icon.png":
+      self.send_response(302)
+      self.send_header("Location", f"http://127.0.0.1:{sink.server_port}/private-action")
+      self.end_headers()
+    elif self.path == "/apple-touch-icon.png":
+      self.send_response(200)
+      self.end_headers()
+      self.wfile.write(b"image")
+    else:
+      self.send_response(404)
+      self.end_headers()
+
+site = ThreadingHTTPServer(("127.0.0.1", 0), SiteHandler)
+with open(url_file, "w", encoding="utf-8") as output:
+  output.write(f"http://127.0.0.1:{site.server_port}")
+site.serve_forever()
+PY
+server_pid=$!
+
+for _ in {1..50}; do
+  [[ -s $server_url_file ]] && break
+  sleep 0.1
+done
+[[ -s $server_url_file ]] || fail "local redirect fixture starts"
+site_url=$(cat "$server_url_file")
+
+redirect_status=0
+PATH="$stubs:$ROOT/bin:/usr/bin:/bin" HOME="$home" \
+  "$ROOT/bin/omarchy-webapp-install" "Redirected" "$site_url/app" "" \
+  >"$tmpdir/out" 2>"$tmpdir/err" || redirect_status=$?
+kill "$server_pid" 2>/dev/null || true
+wait "$server_pid" 2>/dev/null || true
+server_pid=""
+
+(( redirect_status == 0 )) ||
+  fail "webapp install falls back after a discovered icon redirects" "$(cat "$tmpdir/err")"
+[[ ! -s $sink_log ]] ||
+  fail "webapp install does not follow a discovered icon redirect off-origin" "$(cat "$sink_log")"
+pass "webapp install refuses redirects for automatically discovered icons"

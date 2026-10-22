@@ -62,8 +62,18 @@ download_site_icon() {
 }
 
 url_origin() {
-  local url=$1
-  [[ $url =~ ^([Hh][Tt][Tt][Pp][Ss]?://[^/?#]+) ]] && printf '%s' "${BASH_REMATCH[1]}"
+  local url=$1 scheme authority
+
+  [[ $url =~ ^([Hh][Tt][Tt][Pp][Ss]?)://([^/?#]+) ]] || return 1
+  scheme=${BASH_REMATCH[1],,}
+  authority=${BASH_REMATCH[2],,}
+
+  case "$scheme:$authority" in
+  http:*:80) authority=${authority%:80} ;;
+  https:*:443) authority=${authority%:443} ;;
+  esac
+
+  printf '%s://%s' "$scheme" "$authority"
 }
 
 # Chromium --app= treats javascript:, file:, and data: as a document to
