@@ -39,13 +39,13 @@ SH
 
 chmod +x "$stub_dir/"*
 
-FAST_API_RESPONSE='{"targets":[{"url":"http://127.0.0.1/internal"},{"url":"--url=http://169.254.169.254/latest/meta-data/"},{"url":"https://edge.oca.nflxvideo.net/speedtest/range/0-1"}]}' \
+FAST_API_RESPONSE='{"targets":[{"url":"http://127.0.0.1/internal"},{"url":"--url=http://169.254.169.254/latest/meta-data/"},{"url":"https://example.com/"},{"url":"https://fast.com.example.com/"},{"url":"https://fast.com:8443/"},{"url":"https://edge.oca.nflxvideo.net/speedtest/range/0-1"}]}' \
   CALL_LOG="$call_log" PATH="$stub_dir:$ROOT/bin:/usr/bin:/bin" \
   "$ROOT/bin/omarchy-network-speedtest" down >"$test_tmp/out" 2>"$test_tmp/err"
 
 grep -Fq -- '-- https://edge.oca.nflxvideo.net/speedtest/range/0-1' "$call_log" ||
   fail "network speedtest terminates curl options before a validated target" "$(cat "$call_log")"
-if grep -Eq '127\.0\.0\.1|169\.254\.169\.254|--url=' "$call_log"; then
+if grep -Eq '127\.0\.0\.1|169\.254\.169\.254|--url=|example\.com|:8443/' "$call_log"; then
   fail "network speedtest rejects non-vendor and option-like API targets" "$(cat "$call_log")"
 fi
 pass "network speedtest accepts only HTTPS targets on Fast vendor domains"
