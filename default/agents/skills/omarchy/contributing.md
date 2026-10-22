@@ -22,12 +22,11 @@ description with steps to reproduce, and diagnostics. Gather them:
 ```bash
 omarchy version
 
-# Generate the diagnostic log (also written to /tmp/omarchy-debug.log)
-omarchy debug --no-sudo --print
+# Print diagnostics and save a copy for the issue
+omarchy debug --no-sudo --print > omarchy-debug.log
 
-# Interactive variant: `omarchy debug` offers to upload the log to
-# logs.omarchy.org (expires after 24h) and prints a shareable URL to
-# include in the issue.
+# Interactive variant: `omarchy debug` can save the log in the current
+# directory or upload it to logs.omarchy.org (expires after 24h).
 ```
 
 **Capture the problem on screen.** A screenshot or short recording of the bug
