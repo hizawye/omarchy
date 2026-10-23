@@ -126,7 +126,7 @@ redirect_with_credentials() {
 
   # Retain URL credentials only within the same scheme, hostname, and effective
   # port. A same-host redirect to another port can reach a different service.
-  if [[ $current_origin != "$next_origin" || $current_authority != *@* ]]; then
+  if [[ $current_origin != $next_origin || $current_authority != *@* ]]; then
     printf '%s' "$next_url"
     return
   fi
@@ -175,7 +175,7 @@ page_redirect_allowed() {
   # The page URL is chosen by the user, so redirects may move between its apex
   # and www host or change ports. They may not delegate the fetch to another
   # host, and an HTTPS page may not downgrade the request to HTTP.
-  [[ $selected_host == "$next_host" ]] || return 1
+  [[ $selected_host == $next_host ]] || return 1
   [[ $current_scheme != "https" || $next_scheme == "https" ]]
 }
 
@@ -233,7 +233,7 @@ fetch_with_redirects() {
         rm -f "$dest"
         return 1
       }
-      [[ $next_origin == "$allowed_origin" ]] || {
+      [[ $next_origin == $allowed_origin ]] || {
         rm -f "$dest"
         return 1
       }
@@ -249,7 +249,7 @@ download_site_icon() {
   local icon_url=$1 dest=$2 allowed_origin=$3
 
   # Check the URL as resolved, not the href: a relative href can still name a host.
-  [[ $(canonical_origin "$icon_url") == "$allowed_origin" ]] &&
+  [[ $(canonical_origin "$icon_url") == $allowed_origin ]] &&
     fetch_with_redirects "$icon_url" "$dest" icon "$allowed_origin" &&
     [[ -s $dest && $(file -b --mime-type "$dest") == image/* ]]
 }
