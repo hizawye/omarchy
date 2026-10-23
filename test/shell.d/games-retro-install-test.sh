@@ -35,7 +35,7 @@ SH
 
 chmod +x "$stub_dir/"*
 
-core_path="$test_tmp/core\\with-backslash\"and-percent%_libretro.so"
+core_path="$test_tmp/core\\\\with-backslashes\"and-percent%_libretro.so"
 game_path=$(printf '%s/Rom\nExec=retro-injection-marker.sfc' "$test_tmp")
 touch "$core_path" "$game_path"
 
