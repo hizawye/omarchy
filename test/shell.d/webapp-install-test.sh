@@ -150,11 +150,18 @@ pass "interactive webapp install refuses a bad URL before fetching it"
 cat >"$stubs/curl" <<'CURL'
 #!/bin/bash
 output=""
+write_out=""
 url=""
+status=200
+redirect=""
 while (( $# > 0 )); do
   case "$1" in
   -o)
     output=$2
+    shift 2
+    ;;
+  -w)
+    write_out=$2
     shift 2
     ;;
   http://* | https://*)
@@ -167,20 +174,37 @@ done
 
 printf '%s\n' "$url" >>"$CURL_LOG"
 if [[ $url == "https://example.com/app" ]]; then
-  printf '%s\n' '<link rel="apple-touch-icon" href="http://127.0.0.1/private-action">'
+  printf '%s\n' '<link rel="apple-touch-icon" href="http://127.0.0.1/private-action">' >"$output"
 elif [[ $url == "https://example.com/default-port" ]]; then
-  printf '%s\n' '<link rel="apple-touch-icon" href="https://example.com:443/icon.png">'
+  printf '%s\n' '<link rel="apple-touch-icon" href="https://example.com:443/icon.png">' >"$output"
 elif [[ $url == "https://example.com:443/icon.png" ]]; then
   printf 'image' >"$output"
 elif [[ $url == "https://User:Secret@example.com/credentialed" ]]; then
-  printf '%s\n' '<link rel="apple-touch-icon" href="/credentialed-icon.png">'
+  printf '%s\n' '<link rel="apple-touch-icon" href="/credentialed-icon.png">' >"$output"
 elif [[ $url == "https://User:Secret@example.com/credentialed-icon.png" ]]; then
+  printf 'image' >"$output"
+elif [[ $url == "https://example.com/www-redirect" ]]; then
+  status=302
+  redirect="https://www.example.com/apps/demo/"
+elif [[ $url == "https://www.example.com/apps/demo/" ]]; then
+  printf '%s\n' '<link rel="apple-touch-icon" href="icon.png">' >"$output"
+elif [[ $url == "https://www.example.com/apps/demo/icon.png" ]]; then
+  printf 'image' >"$output"
+elif [[ $url == "https://example.com/downgrade" ]]; then
+  status=302
+  redirect="http://example.com/insecure"
+elif [[ $url == "https://www.127.0.0.1/page" ]]; then
+  status=302
+  redirect="https://127.0.0.1/private-page"
+elif [[ $url == "https://www.127.0.0.1/apple-touch-icon.png" ]]; then
   printf 'image' >"$output"
 elif [[ $url == "https://example.com/apple-touch-icon.png" ]]; then
   printf 'image' >"$output"
 else
   exit 22
 fi
+
+[[ -n $write_out ]] && printf '%s\n%s\n' "$status" "$redirect"
 CURL
 
 cat >"$stubs/file" <<'FILE'
@@ -230,16 +254,59 @@ grep -Fxq 'https://User:Secret@example.com/credentialed-icon.png' "$tmpdir/curl-
   fail "webapp install preserves credentials when constructing relative icon URLs" "$(cat "$tmpdir/curl-log")"
 pass "webapp install preserves URL credentials in automatic icon requests"
 
+: >"$tmpdir/curl-log"
+if CURL_LOG="$tmpdir/curl-log" PATH="$stubs:$ROOT/bin:/usr/bin:/bin" HOME="$home" \
+  "$ROOT/bin/omarchy-webapp-install" "WwwRedirect" "https://example.com/www-redirect" "" \
+  >"$tmpdir/out" 2>"$tmpdir/err"; then
+  :
+else
+  fail "webapp install follows an apex-to-www page redirect" "$(cat "$tmpdir/err" "$tmpdir/curl-log")"
+fi
+grep -Fxq 'https://www.example.com/apps/demo/icon.png' "$tmpdir/curl-log" ||
+  fail "webapp install resolves an icon against the redirected www page" "$(cat "$tmpdir/curl-log")"
+pass "webapp install permits apex-to-www redirects and uses the final page URL"
+
+: >"$tmpdir/curl-log"
+if CURL_LOG="$tmpdir/curl-log" PATH="$stubs:$ROOT/bin:/usr/bin:/bin" HOME="$home" \
+  "$ROOT/bin/omarchy-webapp-install" "Downgrade" "https://example.com/downgrade" "" \
+  >"$tmpdir/out" 2>"$tmpdir/err"; then
+  :
+else
+  fail "webapp install falls back after refusing an HTTPS downgrade" "$(cat "$tmpdir/err" "$tmpdir/curl-log")"
+fi
+if grep -Fxq 'http://example.com/insecure' "$tmpdir/curl-log"; then
+  fail "webapp install does not follow an HTTPS page to HTTP" "$(cat "$tmpdir/curl-log")"
+fi
+pass "webapp install refuses HTTPS-to-HTTP page redirects"
+
+: >"$tmpdir/curl-log"
+if CURL_LOG="$tmpdir/curl-log" PATH="$stubs:$ROOT/bin:/usr/bin:/bin" HOME="$home" \
+  "$ROOT/bin/omarchy-webapp-install" "NumericWww" "https://www.127.0.0.1/page" "" \
+  >"$tmpdir/out" 2>"$tmpdir/err"; then
+  :
+else
+  fail "webapp install falls back after refusing a numeric www redirect" "$(cat "$tmpdir/err" "$tmpdir/curl-log")"
+fi
+if grep -Fxq 'https://127.0.0.1/private-page' "$tmpdir/curl-log"; then
+  fail "webapp install does not treat www on a numeric host as an apex alias" "$(cat "$tmpdir/curl-log")"
+fi
+pass "webapp install does not strip www into a numeric destination"
+
 rm "$stubs/curl"
 server_url_file="$tmpdir/server-url"
 sink_log="$tmpdir/redirect-sink"
+site_log="$tmpdir/site-requests"
 
-python3 - "$server_url_file" "$sink_log" >/dev/null <<'PY' &
+python3 - "$server_url_file" "$sink_log" "$site_log" >/dev/null <<'PY' &
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-url_file, sink_log = sys.argv[1:]
+url_file, sink_log, site_log = sys.argv[1:]
+
+def record(server_name, path):
+  with open(site_log, "a", encoding="utf-8") as log:
+    log.write(f"{server_name} {path}\n")
 
 class SinkHandler(BaseHTTPRequestHandler):
   def log_message(self, *args):
@@ -255,18 +322,31 @@ class SinkHandler(BaseHTTPRequestHandler):
 sink = ThreadingHTTPServer(("127.0.0.1", 0), SinkHandler)
 threading.Thread(target=sink.serve_forever, daemon=True).start()
 
-class SiteHandler(BaseHTTPRequestHandler):
+class FinalHandler(BaseHTTPRequestHandler):
   def log_message(self, *args):
     pass
 
   def do_GET(self):
-    if self.path == "/app":
+    record("final", self.path)
+    if self.path == "/apps/demo/":
       self.send_response(200)
       self.end_headers()
-      self.wfile.write(b'<link rel="apple-touch-icon" href="/redirect-icon.png">')
-    elif self.path == "/redirect-icon.png":
+      self.wfile.write(b'<link rel="apple-touch-icon" href="icon.png">')
+    elif self.path == "/apps/demo/icon.png":
       self.send_response(302)
-      self.send_header("Location", f"http://127.0.0.1:{sink.server_port}/private-action")
+      self.send_header("Location", "/apps/demo/static/icon.png")
+      self.end_headers()
+    elif self.path == "/apps/demo/static/icon.png":
+      self.send_response(200)
+      self.end_headers()
+      self.wfile.write(b"image")
+    elif self.path == "/offsite-app":
+      self.send_response(200)
+      self.end_headers()
+      self.wfile.write(b'<link rel="apple-touch-icon" href="/offsite-icon.png">')
+    elif self.path == "/offsite-icon.png":
+      self.send_response(302)
+      self.send_header("Location", f"http://127.0.0.1:{sink.server_port}/private-icon")
       self.end_headers()
     elif self.path == "/apple-touch-icon.png":
       self.send_response(200)
@@ -276,10 +356,36 @@ class SiteHandler(BaseHTTPRequestHandler):
       self.send_response(404)
       self.end_headers()
 
-site = ThreadingHTTPServer(("127.0.0.1", 0), SiteHandler)
+final = ThreadingHTTPServer(("127.0.0.1", 0), FinalHandler)
+threading.Thread(target=final.serve_forever, daemon=True).start()
+
+class EntryHandler(BaseHTTPRequestHandler):
+  def log_message(self, *args):
+    pass
+
+  def do_GET(self):
+    record("entry", self.path)
+    if self.path == "/app":
+      self.send_response(302)
+      self.send_header("Location", f"http://localhost:{final.server_port}/apps/demo/")
+      self.end_headers()
+    elif self.path == "/page-to-loopback":
+      self.send_response(302)
+      self.send_header("Location", f"http://127.0.0.1:{sink.server_port}/private-page")
+      self.end_headers()
+    elif self.path == "/apple-touch-icon.png":
+      self.send_response(200)
+      self.end_headers()
+      self.wfile.write(b"image")
+    else:
+      self.send_response(404)
+      self.end_headers()
+
+entry = ThreadingHTTPServer(("127.0.0.1", 0), EntryHandler)
 with open(url_file, "w", encoding="utf-8") as output:
-  output.write(f"http://127.0.0.1:{site.server_port}")
-site.serve_forever()
+  output.write(f"http://localhost:{entry.server_port}\n")
+  output.write(f"http://localhost:{final.server_port}\n")
+entry.serve_forever()
 PY
 server_pid=$!
 
@@ -288,18 +394,49 @@ for _ in {1..50}; do
   sleep 0.1
 done
 [[ -s $server_url_file ]] || fail "local redirect fixture starts"
-site_url=$(cat "$server_url_file")
+mapfile -t server_urls <"$server_url_file"
+entry_url=${server_urls[0]}
+final_url=${server_urls[1]}
 
-redirect_status=0
 PATH="$stubs:$ROOT/bin:/usr/bin:/bin" HOME="$home" \
-  "$ROOT/bin/omarchy-webapp-install" "Redirected" "$site_url/app" "" \
-  >"$tmpdir/out" 2>"$tmpdir/err" || redirect_status=$?
+  "$ROOT/bin/omarchy-webapp-install" "Redirected" "$entry_url/app" "" \
+  >"$tmpdir/out" 2>"$tmpdir/err" ||
+  fail "webapp install follows a same-site page redirect" "$(cat "$tmpdir/err" "$site_log")"
+
+for request in \
+  "entry /app" \
+  "final /apps/demo/" \
+  "final /apps/demo/icon.png" \
+  "final /apps/demo/static/icon.png"; do
+  grep -Fxq "$request" "$site_log" ||
+    fail "webapp install requests $request" "$(cat "$site_log")"
+done
+pass "webapp install resolves relative icons against the final page and follows same-origin redirects"
+
+: >"$sink_log"
+: >"$site_log"
+PATH="$stubs:$ROOT/bin:/usr/bin:/bin" HOME="$home" \
+  "$ROOT/bin/omarchy-webapp-install" "PageRedirect" "$entry_url/page-to-loopback" "" \
+  >"$tmpdir/out" 2>"$tmpdir/err" ||
+  fail "webapp install falls back after refusing a page redirect off-site" "$(cat "$tmpdir/err" "$site_log")"
+[[ ! -s $sink_log ]] ||
+  fail "webapp install does not follow a page redirect to loopback" "$(cat "$sink_log")"
+grep -Fxq "entry /apple-touch-icon.png" "$site_log" ||
+  fail "webapp install uses the selected site's fallback after refusing its redirect" "$(cat "$site_log")"
+pass "webapp install refuses page redirects to another host before requesting them"
+
+: >"$sink_log"
+: >"$site_log"
+PATH="$stubs:$ROOT/bin:/usr/bin:/bin" HOME="$home" \
+  "$ROOT/bin/omarchy-webapp-install" "IconRedirect" "$final_url/offsite-app" "" \
+  >"$tmpdir/out" 2>"$tmpdir/err" ||
+  fail "webapp install falls back after refusing an icon redirect off-origin" "$(cat "$tmpdir/err" "$site_log")"
+grep -Fxq "final /offsite-icon.png" "$site_log" ||
+  fail "webapp install requests the discovered icon before checking its redirect" "$(cat "$site_log")"
+[[ ! -s $sink_log ]] ||
+  fail "webapp install does not follow a discovered icon redirect off-origin" "$(cat "$sink_log")"
+pass "webapp install refuses off-origin icon redirects after requesting the discovered icon"
+
 kill "$server_pid" 2>/dev/null || true
 wait "$server_pid" 2>/dev/null || true
 server_pid=""
-
-(( redirect_status == 0 )) ||
-  fail "webapp install falls back after a discovered icon redirects" "$(cat "$tmpdir/err")"
-[[ ! -s $sink_log ]] ||
-  fail "webapp install does not follow a discovered icon redirect off-origin" "$(cat "$sink_log")"
-pass "webapp install refuses redirects for automatically discovered icons"
