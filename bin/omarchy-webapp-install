@@ -248,7 +248,9 @@ fetch_with_redirects() {
 download_site_icon() {
   local icon_url=$1 dest=$2 allowed_origin=$3
 
-  fetch_with_redirects "$icon_url" "$dest" icon "$allowed_origin" &&
+  # Check the URL as resolved, not the href: a relative href can still name a host.
+  [[ $(canonical_origin "$icon_url") == "$allowed_origin" ]] &&
+    fetch_with_redirects "$icon_url" "$dest" icon "$allowed_origin" &&
     [[ -s $dest && $(file -b --mime-type "$dest") == image/* ]]
 }
 
@@ -282,7 +284,7 @@ require_http_url() {
 
 fetch_site_icon() {
   local site_url="$1" dest="$2"
-  local origin origin_key page page_file page_url base icon_url icon_origin icon_url_lower
+  local origin origin_key page page_file page_url base icon_url icon_url_lower
   page_file="$WEBAPP_TMP_DIR/page"
 
   # Prefer the site's own high-res icon (apple-touch-icon is typically 180px+),
@@ -299,10 +301,10 @@ fetch_site_icon() {
   page_url=${page_url%%\?*}
   origin=$(url_origin "$page_url")
   origin_key=$(canonical_origin "$page_url")
-  if [[ $page_url == "$origin" ]]; then
-    base="$origin/"
-  else
+  if [[ ${page_url#*://} == */* ]]; then
     base="${page_url%/*}/"
+  else
+    base="$origin/"
   fi
 
   icon_url=$(grep -oiE "<link[^>]*rel=[\"'][^\"']*apple-touch-icon[^\"']*[\"'][^>]*>" <<<"$page" |
@@ -310,15 +312,8 @@ fetch_site_icon() {
 
   icon_url_lower=${icon_url,,}
   case $icon_url_lower in
-  http://* | https://*)
-    icon_origin=$(canonical_origin "$icon_url")
-    [[ $icon_origin == "$origin_key" ]] || icon_url=""
-    ;;
-  //*)
-    icon_url="${origin%%://*}:$icon_url"
-    icon_origin=$(canonical_origin "$icon_url")
-    [[ $icon_origin == "$origin_key" ]] || icon_url=""
-    ;;
+  http://* | https://*) ;;
+  //*) icon_url="${origin%%://*}:$icon_url" ;;
   /*) icon_url="$origin$icon_url" ;;
   ?*) icon_url="$base$icon_url" ;;
   esac

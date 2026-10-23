@@ -477,6 +477,10 @@ class FinalHandler(BaseHTTPRequestHandler):
       self.send_response(200)
       self.end_headers()
       self.wfile.write(b"image")
+    elif self.path == "/":
+      self.send_response(200)
+      self.end_headers()
+      self.wfile.write(f'<link rel="apple-touch-icon" href="127.0.0.1:{sink.server_port}/private-relative">'.encode())
     elif self.path == "/offsite-app":
       self.send_response(200)
       self.end_headers()
@@ -582,6 +586,20 @@ grep -Fxq "final /offsite-icon.png" "$site_log" ||
 [[ ! -s $sink_log ]] ||
   fail "webapp install does not follow a discovered icon redirect off-origin" "$(cat "$sink_log")"
 pass "webapp install refuses off-origin icon redirects after requesting the discovered icon"
+
+# A pathless URL with an uppercase scheme still resolves a relative href as a
+# path on the page's origin, never as a host of its own.
+: >"$sink_log"
+: >"$site_log"
+PATH="$stubs:$ROOT/bin:/usr/bin:/bin" HOME="$home" \
+  "$ROOT/bin/omarchy-webapp-install" "UppercaseScheme" "HTTP://${final_url#http://}" "" \
+  >"$tmpdir/out" 2>"$tmpdir/err" ||
+  fail "webapp install falls back after resolving a relative icon on an uppercase URL" "$(cat "$tmpdir/err" "$site_log")"
+grep -Eq '^final /127\.0\.0\.1:[0-9]+/private-relative$' "$site_log" ||
+  fail "webapp install resolves a relative icon against the uppercase page URL" "$(cat "$site_log")"
+[[ ! -s $sink_log ]] ||
+  fail "webapp install does not turn a relative icon into another host" "$(cat "$sink_log")"
+pass "webapp install resolves relative icons on an uppercase scheme against the page"
 
 kill "$server_pid" 2>/dev/null || true
 wait "$server_pid" 2>/dev/null || true
