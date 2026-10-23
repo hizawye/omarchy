@@ -35,7 +35,7 @@ SH
 
 chmod +x "$stub_dir/"*
 
-core_path="$test_tmp/core\"with-percent%_libretro.so"
+core_path="$test_tmp/core\\with-backslash\"and-percent%_libretro.so"
 game_path=$(printf '%s/Rom\nExec=retro-injection-marker.sfc' "$test_tmp")
 touch "$core_path" "$game_path"
 
@@ -63,4 +63,4 @@ done
 mapfile -d '' -t argv <"$test_tmp/argv"
 [[ ${argv[0]:-} == -L && ${argv[1]:-} == "$core_path" && ${argv[2]:-} == "$game_path" ]] ||
   fail "retro launcher preserves core and game paths as separate arguments" "$(printf '%q\n' "${argv[@]}")"
-pass "retro install preserves quoted paths through the desktop launcher"
+pass "retro install preserves quoted and backslash paths through the desktop launcher"
