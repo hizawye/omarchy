@@ -105,6 +105,16 @@ url_host() {
   printf '%s' "${host,,}"
 }
 
+strings_equal() {
+  # An unquoted variable on the right of [[ == ]] is a pattern, while quoting
+  # variables there is against repository style. A quoted case pattern compares
+  # literal strings, including IPv6 brackets and other glob metacharacters.
+  case $1 in
+  "$2") return 0 ;;
+  *) return 1 ;;
+  esac
+}
+
 redirect_with_credentials() {
   local current_url=$1 next_url=$2 current_origin next_origin
   local current_authority userinfo prefix next_authority suffix
@@ -126,7 +136,7 @@ redirect_with_credentials() {
 
   # Retain URL credentials only within the same scheme, hostname, and effective
   # port. A same-host redirect to another port can reach a different service.
-  if [[ $current_origin != $next_origin || $current_authority != *@* ]]; then
+  if ! strings_equal "$current_origin" "$next_origin" || [[ $current_authority != *@* ]]; then
     printf '%s' "$next_url"
     return
   fi
@@ -175,7 +185,7 @@ page_redirect_allowed() {
   # The page URL is chosen by the user, so redirects may move between its apex
   # and www host or change ports. They may not delegate the fetch to another
   # host, and an HTTPS page may not downgrade the request to HTTP.
-  [[ $selected_host == $next_host ]] || return 1
+  strings_equal "$selected_host" "$next_host" || return 1
   [[ $current_scheme != "https" || $next_scheme == "https" ]]
 }
 
@@ -233,7 +243,7 @@ fetch_with_redirects() {
         rm -f "$dest"
         return 1
       }
-      [[ $next_origin == $allowed_origin ]] || {
+      strings_equal "$next_origin" "$allowed_origin" || {
         rm -f "$dest"
         return 1
       }
@@ -249,7 +259,7 @@ download_site_icon() {
   local icon_url=$1 dest=$2 allowed_origin=$3
 
   # Check the URL as resolved, not the href: a relative href can still name a host.
-  [[ $(canonical_origin "$icon_url") == $allowed_origin ]] &&
+  strings_equal "$(canonical_origin "$icon_url")" "$allowed_origin" &&
     fetch_with_redirects "$icon_url" "$dest" icon "$allowed_origin" &&
     [[ -s $dest && $(file -b --mime-type "$dest") == image/* ]]
 }

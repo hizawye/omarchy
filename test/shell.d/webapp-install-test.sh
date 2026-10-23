@@ -186,6 +186,10 @@ elif [[ $url == "https://example.com/default-port" ]]; then
   write_body $'<link rel="apple-touch-icon" href="https://example.com:443/icon.png">\n'
 elif [[ $url == "https://example.com:443/icon.png" ]]; then
   write_body 'image'
+elif [[ $url == "http://[::1]/app" ]]; then
+  write_body $'<link rel="apple-touch-icon" href="/ipv6-icon.png">\n'
+elif [[ $url == "http://[::1]/ipv6-icon.png" ]]; then
+  write_body 'image'
 elif [[ $url == "https://User:Secret@example.com/credentialed" ]]; then
   write_body $'<link rel="apple-touch-icon" href="/credentialed-icon.png">\n'
 elif [[ $url == "https://User:Secret@example.com/credentialed-icon.png" ]]; then
@@ -289,6 +293,18 @@ fi
 grep -Fxq 'https://example.com:443/icon.png' "$tmpdir/curl-log" ||
   fail "webapp install normalizes default ports for origin comparison" "$(cat "$tmpdir/curl-log")"
 pass "webapp install treats an explicit default port as the same origin"
+
+: >"$tmpdir/curl-log"
+if CURL_LOG="$tmpdir/curl-log" PATH="$stubs:$ROOT/bin:/usr/bin:/bin" HOME="$home" \
+  "$ROOT/bin/omarchy-webapp-install" "IPv6" "http://[::1]/app" "" \
+  >"$tmpdir/out" 2>"$tmpdir/err"; then
+  :
+else
+  fail "webapp install keeps automatic IPv6 icons on their origin" "$(cat "$tmpdir/err" "$tmpdir/curl-log")"
+fi
+grep -Fxq 'http://[::1]/ipv6-icon.png' "$tmpdir/curl-log" ||
+  fail "webapp install requests a same-origin IPv6 icon" "$(cat "$tmpdir/curl-log")"
+pass "webapp install compares IPv6 origins literally"
 
 : >"$tmpdir/curl-log"
 if CURL_LOG="$tmpdir/curl-log" PATH="$stubs:$ROOT/bin:/usr/bin:/bin" HOME="$home" \
