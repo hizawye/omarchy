@@ -106,14 +106,14 @@ url_host() {
 }
 
 redirect_with_credentials() {
-  local current_url=$1 next_url=$2 current_host next_host
+  local current_url=$1 next_url=$2 current_origin next_origin
   local current_authority userinfo prefix next_authority suffix
 
-  current_host=$(url_host "$current_url") || {
+  current_origin=$(canonical_origin "$current_url") || {
     printf '%s' "$next_url"
     return
   }
-  next_host=$(url_host "$next_url") || {
+  next_origin=$(canonical_origin "$next_url") || {
     printf '%s' "$next_url"
     return
   }
@@ -124,9 +124,9 @@ redirect_with_credentials() {
   }
   current_authority=${BASH_REMATCH[1]}
 
-  # Match curl -L's default credential boundary: retain URL credentials for the
-  # same hostname, but never copy them to an apex/www or other host redirect.
-  if [[ $current_host != "$next_host" || $current_authority != *@* ]]; then
+  # Retain URL credentials only within the same scheme, hostname, and effective
+  # port. A same-host redirect to another port can reach a different service.
+  if [[ $current_origin != "$next_origin" || $current_authority != *@* ]]; then
     printf '%s' "$next_url"
     return
   fi

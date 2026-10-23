@@ -197,12 +197,33 @@ elif [[ $url == "https://User:Secret@example.com/after-credentialed-redirect" ]]
   write_body $'<link rel="apple-touch-icon" href="/redirected-credentialed-icon.png">\n'
 elif [[ $url == "https://User:Secret@example.com/redirected-credentialed-icon.png" ]]; then
   write_body 'image'
+elif [[ $url == "https://User:Secret@example.com/credentialed-default-port-redirect" ]]; then
+  status=302
+  redirect="https://example.com:443/after-default-port-redirect"
+elif [[ $url == "https://User:Secret@example.com:443/after-default-port-redirect" ]]; then
+  write_body $'<link rel="apple-touch-icon" href="/default-port-credential-icon.png">\n'
+elif [[ $url == "https://User:Secret@example.com:443/default-port-credential-icon.png" ]]; then
+  write_body 'image'
 elif [[ $url == "https://User:Secret@example.com/credentialed-www-redirect" ]]; then
   status=302
   redirect="https://www.example.com/no-credentials"
 elif [[ $url == "https://www.example.com/no-credentials" ]]; then
   write_body $'<link rel="apple-touch-icon" href="/anonymous-icon.png">\n'
 elif [[ $url == "https://www.example.com/anonymous-icon.png" ]]; then
+  write_body 'image'
+elif [[ $url == "https://User:Secret@example.com/credentialed-port-redirect" ]]; then
+  status=302
+  redirect="https://example.com:8443/no-credentials"
+elif [[ $url == "https://example.com:8443/no-credentials" ]]; then
+  write_body $'<link rel="apple-touch-icon" href="/port-icon.png">\n'
+elif [[ $url == "https://example.com:8443/port-icon.png" ]]; then
+  write_body 'image'
+elif [[ $url == "http://User:Secret@example.com/credentialed-upgrade" ]]; then
+  status=302
+  redirect="https://example.com/no-upgrade-credentials"
+elif [[ $url == "https://example.com/no-upgrade-credentials" ]]; then
+  write_body $'<link rel="apple-touch-icon" href="/upgrade-icon.png">\n'
+elif [[ $url == "https://example.com/upgrade-icon.png" ]]; then
   write_body 'image'
 elif [[ $url == "https://example.com/www-redirect" ]]; then
   status=302
@@ -298,6 +319,19 @@ pass "webapp install preserves credentials across same-host page redirects"
 
 : >"$tmpdir/curl-log"
 if CURL_LOG="$tmpdir/curl-log" PATH="$stubs:$ROOT/bin:/usr/bin:/bin" HOME="$home" \
+  "$ROOT/bin/omarchy-webapp-install" "CredentialedDefaultPort" \
+  "https://User:Secret@example.com/credentialed-default-port-redirect" "" \
+  >"$tmpdir/out" 2>"$tmpdir/err"; then
+  :
+else
+  fail "webapp install keeps credentials through an explicit default port" "$(cat "$tmpdir/err" "$tmpdir/curl-log")"
+fi
+grep -Fxq 'https://User:Secret@example.com:443/after-default-port-redirect' "$tmpdir/curl-log" ||
+  fail "webapp install normalizes the default port before carrying credentials" "$(cat "$tmpdir/curl-log")"
+pass "webapp install preserves credentials within the canonical origin"
+
+: >"$tmpdir/curl-log"
+if CURL_LOG="$tmpdir/curl-log" PATH="$stubs:$ROOT/bin:/usr/bin:/bin" HOME="$home" \
   "$ROOT/bin/omarchy-webapp-install" "CredentialBoundary" \
   "https://User:Secret@example.com/credentialed-www-redirect" "" \
   >"$tmpdir/out" 2>"$tmpdir/err"; then
@@ -311,6 +345,38 @@ if grep -Fq 'User:Secret@www.example.com' "$tmpdir/curl-log"; then
   fail "webapp install does not copy credentials to an apex or www alias" "$(cat "$tmpdir/curl-log")"
 fi
 pass "webapp install keeps redirect credentials on their exact hostname"
+
+: >"$tmpdir/curl-log"
+if CURL_LOG="$tmpdir/curl-log" PATH="$stubs:$ROOT/bin:/usr/bin:/bin" HOME="$home" \
+  "$ROOT/bin/omarchy-webapp-install" "CredentialPortBoundary" \
+  "https://User:Secret@example.com/credentialed-port-redirect" "" \
+  >"$tmpdir/out" 2>"$tmpdir/err"; then
+  :
+else
+  fail "webapp install follows a same-host port redirect without credentials" "$(cat "$tmpdir/err" "$tmpdir/curl-log")"
+fi
+grep -Fxq 'https://example.com:8443/no-credentials' "$tmpdir/curl-log" ||
+  fail "webapp install requests the other port without credentials" "$(cat "$tmpdir/curl-log")"
+if grep -Fq 'User:Secret@example.com:8443' "$tmpdir/curl-log"; then
+  fail "webapp install does not copy credentials to another service on the same host" "$(cat "$tmpdir/curl-log")"
+fi
+pass "webapp install keeps redirect credentials on their canonical origin"
+
+: >"$tmpdir/curl-log"
+if CURL_LOG="$tmpdir/curl-log" PATH="$stubs:$ROOT/bin:/usr/bin:/bin" HOME="$home" \
+  "$ROOT/bin/omarchy-webapp-install" "CredentialSchemeBoundary" \
+  "http://User:Secret@example.com/credentialed-upgrade" "" \
+  >"$tmpdir/out" 2>"$tmpdir/err"; then
+  :
+else
+  fail "webapp install follows an HTTP-to-HTTPS redirect without credentials" "$(cat "$tmpdir/err" "$tmpdir/curl-log")"
+fi
+grep -Fxq 'https://example.com/no-upgrade-credentials' "$tmpdir/curl-log" ||
+  fail "webapp install requests the upgraded scheme without credentials" "$(cat "$tmpdir/curl-log")"
+if grep -Fq 'User:Secret@example.com/no-upgrade-credentials' "$tmpdir/curl-log"; then
+  fail "webapp install does not copy credentials across schemes" "$(cat "$tmpdir/curl-log")"
+fi
+pass "webapp install keeps redirect credentials within their scheme"
 
 : >"$tmpdir/curl-log"
 if CURL_LOG="$tmpdir/curl-log" PATH="$stubs:$ROOT/bin:/usr/bin:/bin" HOME="$home" \
