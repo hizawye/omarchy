@@ -154,6 +154,13 @@ write_out=""
 url=""
 status=200
 redirect=""
+write_body() {
+  if [[ $output == "-" ]]; then
+    printf '%s' "$1"
+  else
+    printf '%s' "$1" >"$output"
+  fi
+}
 while (( $# > 0 )); do
   case "$1" in
   -o)
@@ -174,22 +181,36 @@ done
 
 printf '%s\n' "$url" >>"$CURL_LOG"
 if [[ $url == "https://example.com/app" ]]; then
-  printf '%s\n' '<link rel="apple-touch-icon" href="http://127.0.0.1/private-action">' >"$output"
+  write_body $'<link rel="apple-touch-icon" href="http://127.0.0.1/private-action">\n'
 elif [[ $url == "https://example.com/default-port" ]]; then
-  printf '%s\n' '<link rel="apple-touch-icon" href="https://example.com:443/icon.png">' >"$output"
+  write_body $'<link rel="apple-touch-icon" href="https://example.com:443/icon.png">\n'
 elif [[ $url == "https://example.com:443/icon.png" ]]; then
-  printf 'image' >"$output"
+  write_body 'image'
 elif [[ $url == "https://User:Secret@example.com/credentialed" ]]; then
-  printf '%s\n' '<link rel="apple-touch-icon" href="/credentialed-icon.png">' >"$output"
+  write_body $'<link rel="apple-touch-icon" href="/credentialed-icon.png">\n'
 elif [[ $url == "https://User:Secret@example.com/credentialed-icon.png" ]]; then
-  printf 'image' >"$output"
+  write_body 'image'
+elif [[ $url == "https://User:Secret@example.com/credentialed-redirect" ]]; then
+  status=302
+  redirect="https://example.com/after-credentialed-redirect"
+elif [[ $url == "https://User:Secret@example.com/after-credentialed-redirect" ]]; then
+  write_body $'<link rel="apple-touch-icon" href="/redirected-credentialed-icon.png">\n'
+elif [[ $url == "https://User:Secret@example.com/redirected-credentialed-icon.png" ]]; then
+  write_body 'image'
+elif [[ $url == "https://User:Secret@example.com/credentialed-www-redirect" ]]; then
+  status=302
+  redirect="https://www.example.com/no-credentials"
+elif [[ $url == "https://www.example.com/no-credentials" ]]; then
+  write_body $'<link rel="apple-touch-icon" href="/anonymous-icon.png">\n'
+elif [[ $url == "https://www.example.com/anonymous-icon.png" ]]; then
+  write_body 'image'
 elif [[ $url == "https://example.com/www-redirect" ]]; then
   status=302
   redirect="https://www.example.com/apps/demo/"
 elif [[ $url == "https://www.example.com/apps/demo/" ]]; then
-  printf '%s\n' '<link rel="apple-touch-icon" href="icon.png">' >"$output"
+  write_body $'<link rel="apple-touch-icon" href="icon.png">\n'
 elif [[ $url == "https://www.example.com/apps/demo/icon.png" ]]; then
-  printf 'image' >"$output"
+  write_body 'image'
 elif [[ $url == "https://example.com/downgrade" ]]; then
   status=302
   redirect="http://example.com/insecure"
@@ -197,14 +218,20 @@ elif [[ $url == "https://www.127.0.0.1/page" ]]; then
   status=302
   redirect="https://127.0.0.1/private-page"
 elif [[ $url == "https://www.127.0.0.1/apple-touch-icon.png" ]]; then
-  printf 'image' >"$output"
+  write_body 'image'
 elif [[ $url == "https://example.com/apple-touch-icon.png" ]]; then
-  printf 'image' >"$output"
+  write_body 'image'
 else
   exit 22
 fi
 
-[[ -n $write_out ]] && printf '%s\n%s\n' "$status" "$redirect"
+if [[ -n $write_out ]]; then
+  if [[ $write_out == *'%{stderr}'* ]]; then
+    printf '%s\n%s\n' "$status" "$redirect" >&2
+  else
+    printf '%s\n%s\n' "$status" "$redirect"
+  fi
+fi
 CURL
 
 cat >"$stubs/file" <<'FILE'
@@ -253,6 +280,37 @@ fi
 grep -Fxq 'https://User:Secret@example.com/credentialed-icon.png' "$tmpdir/curl-log" ||
   fail "webapp install preserves credentials when constructing relative icon URLs" "$(cat "$tmpdir/curl-log")"
 pass "webapp install preserves URL credentials in automatic icon requests"
+
+: >"$tmpdir/curl-log"
+if CURL_LOG="$tmpdir/curl-log" PATH="$stubs:$ROOT/bin:/usr/bin:/bin" HOME="$home" \
+  "$ROOT/bin/omarchy-webapp-install" "CredentialedRedirect" \
+  "https://User:Secret@example.com/credentialed-redirect" "" \
+  >"$tmpdir/out" 2>"$tmpdir/err"; then
+  :
+else
+  fail "webapp install keeps credentials through a same-host page redirect" "$(cat "$tmpdir/err" "$tmpdir/curl-log")"
+fi
+grep -Fxq 'https://User:Secret@example.com/after-credentialed-redirect' "$tmpdir/curl-log" ||
+  fail "webapp install carries credentials to a same-host redirect" "$(cat "$tmpdir/curl-log")"
+grep -Fxq 'https://User:Secret@example.com/redirected-credentialed-icon.png' "$tmpdir/curl-log" ||
+  fail "webapp install resolves icons from the credentialed final page" "$(cat "$tmpdir/curl-log")"
+pass "webapp install preserves credentials across same-host page redirects"
+
+: >"$tmpdir/curl-log"
+if CURL_LOG="$tmpdir/curl-log" PATH="$stubs:$ROOT/bin:/usr/bin:/bin" HOME="$home" \
+  "$ROOT/bin/omarchy-webapp-install" "CredentialBoundary" \
+  "https://User:Secret@example.com/credentialed-www-redirect" "" \
+  >"$tmpdir/out" 2>"$tmpdir/err"; then
+  :
+else
+  fail "webapp install follows an apex-to-www redirect without credentials" "$(cat "$tmpdir/err" "$tmpdir/curl-log")"
+fi
+grep -Fxq 'https://www.example.com/no-credentials' "$tmpdir/curl-log" ||
+  fail "webapp install requests the redirected host without credentials" "$(cat "$tmpdir/curl-log")"
+if grep -Fq 'User:Secret@www.example.com' "$tmpdir/curl-log"; then
+  fail "webapp install does not copy credentials to an apex or www alias" "$(cat "$tmpdir/curl-log")"
+fi
+pass "webapp install keeps redirect credentials on their exact hostname"
 
 : >"$tmpdir/curl-log"
 if CURL_LOG="$tmpdir/curl-log" PATH="$stubs:$ROOT/bin:/usr/bin:/bin" HOME="$home" \
@@ -340,6 +398,19 @@ class FinalHandler(BaseHTTPRequestHandler):
       self.send_response(200)
       self.end_headers()
       self.wfile.write(b"image")
+    elif self.path == "/large-app":
+      body = b'<link rel="apple-touch-icon" href="/large-icon.png">' + b"x" * 1100000
+      self.send_response(200)
+      self.send_header("Content-Length", str(len(body)))
+      self.end_headers()
+      try:
+        self.wfile.write(body)
+      except (BrokenPipeError, ConnectionResetError):
+        pass
+    elif self.path == "/large-icon.png":
+      self.send_response(200)
+      self.end_headers()
+      self.wfile.write(b"image")
     elif self.path == "/offsite-app":
       self.send_response(200)
       self.end_headers()
@@ -412,6 +483,15 @@ for request in \
     fail "webapp install requests $request" "$(cat "$site_log")"
 done
 pass "webapp install resolves relative icons against the final page and follows same-origin redirects"
+
+: >"$site_log"
+PATH="$stubs:$ROOT/bin:/usr/bin:/bin" HOME="$home" \
+  "$ROOT/bin/omarchy-webapp-install" "LargePage" "$final_url/large-app" "" \
+  >"$tmpdir/out" 2>"$tmpdir/err" ||
+  fail "webapp install reads a bounded prefix from a large page" "$(cat "$tmpdir/err" "$site_log")"
+grep -Fxq "final /large-icon.png" "$site_log" ||
+  fail "webapp install discovers an early icon on a large page" "$(cat "$site_log")"
+pass "webapp install keeps bounded-prefix icon discovery for large pages"
 
 : >"$sink_log"
 : >"$site_log"

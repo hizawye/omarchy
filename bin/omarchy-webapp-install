@@ -105,6 +105,48 @@ url_host() {
   printf '%s' "${host,,}"
 }
 
+redirect_with_credentials() {
+  local current_url=$1 next_url=$2 current_host next_host
+  local current_authority userinfo prefix next_authority suffix
+
+  current_host=$(url_host "$current_url") || {
+    printf '%s' "$next_url"
+    return
+  }
+  next_host=$(url_host "$next_url") || {
+    printf '%s' "$next_url"
+    return
+  }
+
+  [[ $current_url =~ ^[Hh][Tt][Tt][Pp][Ss]?://([^/?#]+) ]] || {
+    printf '%s' "$next_url"
+    return
+  }
+  current_authority=${BASH_REMATCH[1]}
+
+  # Match curl -L's default credential boundary: retain URL credentials for the
+  # same hostname, but never copy them to an apex/www or other host redirect.
+  if [[ $current_host != "$next_host" || $current_authority != *@* ]]; then
+    printf '%s' "$next_url"
+    return
+  fi
+  userinfo=${current_authority%@*}
+
+  [[ $next_url =~ ^([Hh][Tt][Tt][Pp][Ss]?://)([^/?#]+)(.*)$ ]] || {
+    printf '%s' "$next_url"
+    return
+  }
+  prefix=${BASH_REMATCH[1]}
+  next_authority=${BASH_REMATCH[2]}
+  suffix=${BASH_REMATCH[3]}
+
+  if [[ $next_authority == *@* ]]; then
+    printf '%s' "$next_url"
+  else
+    printf '%s%s@%s%s' "$prefix" "$userinfo" "$next_authority" "$suffix"
+  fi
+}
+
 site_host_key() {
   local host=$1 without_www
 
@@ -140,18 +182,27 @@ page_redirect_allowed() {
 fetch_with_redirects() {
   local start_url=$1 dest=$2 policy=$3 allowed_origin=${4:-}
   local current_url=$start_url metadata status next_url next_origin
+  local metadata_file="$WEBAPP_TMP_DIR/curl-metadata"
   local redirects=0 max_redirects=3 max_time=10
   local -a curl_args
 
-  curl_args=(-fsS --proto '=http,https' --max-redirs 0)
+  curl_args=(-fs --proto '=http,https' --max-redirs 0)
   if [[ $policy == "page" ]]; then
     max_time=5
-    curl_args+=(--max-filesize 1000000)
   fi
 
   while :; do
     : >"$dest"
-    if ! metadata=$(curl "${curl_args[@]}" --max-time "$max_time" \
+    if [[ $policy == "page" ]]; then
+      # Icon markup normally lives near the start of the document. Keep the old
+      # bounded-prefix behavior: head closes the pipe at 100 KB, so large or slow
+      # pages do not have to finish before discovery can continue. Write curl's
+      # status separately so each redirect is still checked before its next hop.
+      curl "${curl_args[@]}" --max-time "$max_time" -o - \
+        -w $'%{stderr}%{http_code}\n%{redirect_url}' -- "$current_url" \
+        2>"$metadata_file" | head -c 100000 >"$dest"
+      metadata=$(<"$metadata_file")
+    elif ! metadata=$(curl "${curl_args[@]}" --max-time "$max_time" \
       -o "$dest" -w $'%{http_code}\n%{redirect_url}' -- "$current_url" 2>/dev/null); then
       rm -f "$dest"
       return 1
@@ -188,6 +239,7 @@ fetch_with_redirects() {
       }
     fi
 
+    next_url=$(redirect_with_credentials "$current_url" "$next_url")
     current_url=$next_url
     redirects=$((redirects + 1))
   done
